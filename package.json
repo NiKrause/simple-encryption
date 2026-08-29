@@ -1,6 +1,6 @@
 {
   "name": "@le-space/orbitdb-simple-encryption",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "A simple password encryption module that encrypts data using AES-GCM PBKDF2.",
   "type": "module",
   "main": "src/index.js",
