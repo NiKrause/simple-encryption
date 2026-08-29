@@ -49,17 +49,13 @@ export function AES () {
   const ivInterval = 32000 // NIST recommends max 2^32
 
   let salt
-  let nonce
-  let aesGcm
 
   let encryptionKey
   let decryptionKey
-  let decryptionNonce
+  let decryptionSalt
 
   const deriveEncryptionKey = async (password) => {
     salt = crypto.getRandomValues(new Uint8Array(saltLength))
-    nonce = crypto.getRandomValues(new Uint8Array(nonceLength))
-    aesGcm = { name: algorithm, iv: nonce }
 
     return await deriveKey('encrypt', password, salt)
   }
@@ -90,16 +86,22 @@ export function AES () {
    * will then be used to encrypt the data.
    */
   const encrypt = async (data, password, count = 0) => {
-    if ((!encryptionKey || !nonce || !salt || !aesGcm) || (count !== 0 && count % ivInterval === 0)) {
-      // Derive a new encryption key
+    if ((!encryptionKey || !salt) || (count !== 0 && count % ivInterval === 0)) {
+      // Derive a new encryption key, with a new salt
       if (typeof password === 'string') {
         password = fromString(password)
       }
       encryptionKey = await deriveEncryptionKey(password)
     }
-    // Encrypt the data
-    const ciphertext = await crypto.subtle.encrypt(aesGcm, encryptionKey, data)
-    return concat([salt, aesGcm.iv, new Uint8Array(ciphertext)])
+
+    // A fresh nonce for every message. Under AES-GCM a nonce repeated under one
+    // key is not a cost to trade against key-derivation work: it discloses the
+    // XOR of the plaintexts and allows the GHASH authentication subkey to be
+    // recovered, so messages become forgeable as well as readable. Only the
+    // PBKDF2 derivation is expensive and it is what stays cached.
+    const nonce = crypto.getRandomValues(new Uint8Array(nonceLength))
+    const ciphertext = await crypto.subtle.encrypt({ name: algorithm, iv: nonce }, encryptionKey, data)
+    return concat([salt, nonce, new Uint8Array(ciphertext)])
   }
 
   /**
@@ -112,17 +114,18 @@ export function AES () {
     const salt = data.subarray(0, saltLength)
     const nonce = data.subarray(saltLength, saltLength + nonceLength)
     const ciphertext = data.subarray(saltLength + nonceLength)
-    const aesGcm = { name: algorithm, iv: nonce }
-    if (!decryptionKey || nonce.toString() !== decryptionNonce?.toString()) {
-      // The nonce is different than our cached one, derive the decryption key
+    // The derived key depends on the salt, not the nonce. Keying this cache on
+    // the nonce was harmless only while the nonce never changed; with a nonce
+    // per message it would re-run PBKDF2 for every entry.
+    if (!decryptionKey || salt.toString() !== decryptionSalt?.toString()) {
       if (typeof password === 'string') {
         password = fromString(password)
       }
       decryptionKey = await deriveDecryptionKey(password, salt)
-      decryptionNonce = nonce
+      decryptionSalt = salt
     }
     // Decrypt the data
-    const plaintext = await crypto.subtle.decrypt(aesGcm, decryptionKey, ciphertext)
+    const plaintext = await crypto.subtle.decrypt({ name: algorithm, iv: nonce }, decryptionKey, ciphertext)
     return new Uint8Array(plaintext)
   }
 
